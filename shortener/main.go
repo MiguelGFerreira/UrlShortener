@@ -7,28 +7,29 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"os"
-	_"github.com/lib/pq" // Import PostgreSQL driver
+
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq" // Import PostgreSQL driver
 )
 
 func main() {
-	DBUSER := os.Getenv("DB_USER")
-	DBPASS := os.Getenv("DB_PASS")
-	// Conectar ao banco de dados PostgreSQL
-	db, err := sql.Open("postgres", fmt.Sprintf("user=%s password=%s dbname=url_shortener sslmode=disable",DBUSER,DBPASS))
+	DBUSER := godotenv.Load("DB_USER")
+	DBPASS := godotenv.Load("DB_PASS")
+	// Conect to PostgreSQL
+	db, err := sql.Open("postgres", fmt.Sprintf("user=%s password=%s dbname=url_shortener sslmode=disable", DBUSER, DBPASS))
 	if err != nil {
 		panic(err)
 	}
 	defer db.Close()
 
-	// Criar handler para encurtar URLs
+	// Handler to shorten URLs
 	shortenHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Decodificar o corpo da requisição para obter a URL longa
+		// Decode the request body to get the long URL
 		var longURL struct {
 			LongURL string `json:"long_url"`
 		}
@@ -39,14 +40,14 @@ func main() {
 			return
 		}
 
-		// Gerar um alias curto aleatório (6 caracteres)
+		// Generate a random short alias (6 characters)
 		shortURL := generateRandomString(6)
 
-		// Verificar se o alias curto já existe no banco de dados
+		// Check if the short alias already exists in the database
 		exists, err := checkShortURLExists(db, shortURL)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "Erro: %v", err)
+			fmt.Fprintf(w, "Error: %v", err)
 			return
 		}
 		for exists {
@@ -54,20 +55,20 @@ func main() {
 			exists, err = checkShortURLExists(db, shortURL)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "Erro: %v", err)
+				fmt.Fprintf(w, "Error: %v", err)
 				return
 			}
 		}
 
-		// Inserir o mapeamento URL longa -> alias curto no banco de dados
+		// Insert the long URL -> short alias mapping into the database
 		err = insertURLMapping(db, longURL.LongURL, shortURL)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "Erro: %v", err)
+			fmt.Fprintf(w, "Error: %v", err)
 			return
 		}
 
-		// Criar a resposta com o alias curto
+		// Create the response with the short alias
 		response := struct {
 			ShortURL string `json:"short_url"`
 		}{ShortURL: fmt.Sprintf("http://localhost:8080/redirect/%s", shortURL)}
@@ -76,13 +77,13 @@ func main() {
 		json.NewEncoder(w).Encode(response)
 	})
 
-	// Iniciar servidor HTTP
+	// Start HTTP server
 	http.HandleFunc("/shorten", shortenHandler)
-	fmt.Println("Servidor de encurtamento em execução na porta 8080")
+	fmt.Println("Shortening server running on port 8080")
 	http.ListenAndServe(":8080", nil)
 }
 
-// Função para gerar string aleatória (6 caracteres)
+// Function to generate random string
 func generateRandomString(length int) string {
 	var chars []rune
 	for i := 'a'; i <= 'z'; i++ {
@@ -102,7 +103,7 @@ func generateRandomString(length int) string {
 	return string(bytes)
 }
 
-// Função para verificar se o alias curto já existe no banco de dados
+// Function to check if the short alias already exists in the database
 func checkShortURLExists(db *sql.DB, shortURL string) (bool, error) {
 	ctx := context.Background()
 	var count int
@@ -113,7 +114,7 @@ func checkShortURLExists(db *sql.DB, shortURL string) (bool, error) {
 	return count > 0, nil
 }
 
-// Função para inserir mapeamento URL longa -> alias curto no banco de dados
+// Function to insert long URL -> short alias mapping into the database
 func insertURLMapping(db *sql.DB, longURL string, shortURL string) error {
 	ctx := context.Background()
 	_, err := db.ExecContext(ctx, "INSERT INTO url_mappings (long_url, short_url) VALUES ($1, $2)", longURL, shortURL)
