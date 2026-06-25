@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 
 	"UrlShortener/internal/model"
 	"UrlShortener/internal/store"
@@ -17,7 +16,7 @@ func main() {
 	// Load variables from the .env file (if present) into the environment
 	godotenv.Load()
 
-	db, err := store.Connect(os.Getenv("DB_USER"), os.Getenv("DB_PASS"))
+	db, err := store.Connect(store.ConfigFromEnv())
 	if err != nil {
 		panic(err)
 	}

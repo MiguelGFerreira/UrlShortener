@@ -6,15 +6,51 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 
 	"UrlShortener/internal/model"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
+// Config holds the PostgreSQL connection settings.
+type Config struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	Name     string
+	SSLMode  string
+}
+
+// ConfigFromEnv reads the connection settings from environment variables,
+// falling back to sensible local defaults.
+func ConfigFromEnv() Config {
+	return Config{
+		Host:     env("DB_HOST", "localhost"),
+		Port:     env("DB_PORT", "5432"),
+		User:     env("DB_USER", "postgres"),
+		Password: os.Getenv("DB_PASS"),
+		Name:     env("DB_NAME", "url_shortener"),
+		SSLMode:  env("DB_SSLMODE", "disable"),
+	}
+}
+
+// env returns the value of the environment variable, or fallback when unset.
+func env(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 // Connect opens a connection to PostgreSQL and verifies it is reachable.
-func Connect(user, pass string) (*sql.DB, error) {
-	db, err := sql.Open("postgres", fmt.Sprintf("user=%s password=%s dbname=url_shortener sslmode=disable", user, pass))
+func Connect(cfg Config) (*sql.DB, error) {
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Name, cfg.SSLMode,
+	)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
 	}

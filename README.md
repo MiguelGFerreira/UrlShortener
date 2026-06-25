@@ -3,6 +3,7 @@
 [![CI](https://github.com/MiguelGFerreira/UrlShortener/actions/workflows/ci.yml/badge.svg)](https://github.com/MiguelGFerreira/UrlShortener/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/Go-1.18+-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-database-336791?logo=postgresql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/MiguelGFerreira/UrlShortener)](https://goreportcard.com/report/github.com/MiguelGFerreira/UrlShortener)
 
@@ -72,17 +73,43 @@ type in `internal/model`, so the database logic lives in a single place.
    cp .env.example .env
    ```
 
-   | Variable  | Description                | Example    |
-   | --------- | -------------------------- | ---------- |
-   | `DB_USER` | PostgreSQL username        | `postgres` |
-   | `DB_PASS` | PostgreSQL user's password | `secret`   |
+   | Variable     | Description         | Default         |
+   | ------------ | ------------------- | --------------- |
+   | `DB_USER`    | PostgreSQL username | `postgres`      |
+   | `DB_PASS`    | PostgreSQL password | _(empty)_       |
+   | `DB_HOST`    | PostgreSQL host     | `localhost`     |
+   | `DB_PORT`    | PostgreSQL port     | `5432`          |
+   | `DB_NAME`    | Database name       | `url_shortener` |
+   | `DB_SSLMODE` | libpq SSL mode      | `disable`       |
 
-   > The database name (`url_shortener`) and `localhost` host are currently
-   > hardcoded in `internal/store`.
+   > Only `DB_USER`/`DB_PASS` are usually needed; the rest have sensible
+   > defaults for local development.
 
-## Running
+## Run with Docker
 
-Start each service in its own terminal:
+The quickest way to get everything running — PostgreSQL plus both services — is
+Docker Compose. It creates the database, applies `schema.sql`, and starts all
+three containers (no manual database setup needed):
+
+```bash
+docker compose up --build
+```
+
+- Shortener → http://localhost:8080
+- Redirector → http://localhost:8081
+
+Credentials default to `postgres`/`postgres`; override them with a `.env` file
+(see `.env.example`) before starting. Tear everything down, including the
+database volume, with:
+
+```bash
+docker compose down -v
+```
+
+## Run locally
+
+With the database created and `.env` configured (see [Setup](#setup)), start
+each service in its own terminal:
 
 ```bash
 go run ./shortener    # listens on :8080
@@ -124,7 +151,7 @@ Ideas for extending the project:
 - [ ] Rate limiting on `/shorten`
 - [ ] Redis cache in front of the redirect lookup
 - [ ] A small HTML front-end for shortening from the browser
-- [ ] Dockerfile + docker-compose (app + PostgreSQL)
+- [x] Dockerfile + docker-compose (app + PostgreSQL)
 - [x] Unit tests and CI
 
 ## License

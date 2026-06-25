@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.env
+*.exe
+*.exe~
+*.test
+*.out
+README.md
+LICENSE
+Dockerfile
+.dockerignore
+docker-compose.yml
