@@ -1,5 +1,6 @@
 # URL Shortener
 
+[![CI](https://github.com/MiguelGFerreira/UrlShortener/actions/workflows/ci.yml/badge.svg)](https://github.com/MiguelGFerreira/UrlShortener/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/Go-1.18+-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-database-336791?logo=postgresql&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -124,7 +125,7 @@ Ideas for extending the project:
 - [ ] Redis cache in front of the redirect lookup
 - [ ] A small HTML front-end for shortening from the browser
 - [ ] Dockerfile + docker-compose (app + PostgreSQL)
-- [ ] Unit tests and CI
+- [x] Unit tests and CI
 
 ## License
 
