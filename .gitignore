@@ -1,1 +1,16 @@
+# Environment variables
 .env
+
+# Compiled binaries / build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary and coverage output
+*.test
+*.out
+
+# claude
+.claude

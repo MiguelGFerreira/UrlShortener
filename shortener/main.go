@@ -1,22 +1,23 @@
 package main
 
 import (
-	"context"
-	"database/sql"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/http"
+	"os"
+
+	"UrlShortener/internal/model"
+	"UrlShortener/internal/store"
 
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq" // Import PostgreSQL driver
 )
 
 func main() {
-	DBUSER := godotenv.Load("DB_USER")
-	DBPASS := godotenv.Load("DB_PASS")
-	// Conect to PostgreSQL
-	db, err := sql.Open("postgres", fmt.Sprintf("user=%s password=%s dbname=url_shortener sslmode=disable", DBUSER, DBPASS))
+	// Load variables from the .env file (if present) into the environment
+	godotenv.Load()
+
+	db, err := store.Connect(os.Getenv("DB_USER"), os.Getenv("DB_PASS"))
 	if err != nil {
 		panic(err)
 	}
@@ -30,29 +31,38 @@ func main() {
 		}
 
 		// Decode the request body to get the long URL
-		var longURL struct {
+		var body struct {
 			LongURL string `json:"long_url"`
 		}
-		err := json.NewDecoder(r.Body).Decode(&longURL)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, "Erro: %v", err)
+			fmt.Fprintf(w, "Error: %v", err)
 			return
 		}
 
-		// Generate a random short alias (6 characters)
-		shortURL := generateRandomString(6)
+		ctx := r.Context()
 
-		// Check if the short alias already exists in the database
-		exists, err := checkShortURLExists(db, shortURL)
+		// Generate a unique random short alias (6 characters)
+		shortURL, err := generateRandomString(6)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "Error: %v", err)
+			return
+		}
+		exists, err := store.ShortURLExists(ctx, db, shortURL)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "Error: %v", err)
 			return
 		}
 		for exists {
-			shortURL = generateRandomString(6)
-			exists, err = checkShortURLExists(db, shortURL)
+			shortURL, err = generateRandomString(6)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintf(w, "Error: %v", err)
+				return
+			}
+			exists, err = store.ShortURLExists(ctx, db, shortURL)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				fmt.Fprintf(w, "Error: %v", err)
@@ -61,8 +71,8 @@ func main() {
 		}
 
 		// Insert the long URL -> short alias mapping into the database
-		err = insertURLMapping(db, longURL.LongURL, shortURL)
-		if err != nil {
+		mapping := model.URLMapping{LongURL: body.LongURL, ShortURL: shortURL}
+		if err := store.InsertMapping(ctx, db, mapping); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "Error: %v", err)
 			return
@@ -71,7 +81,7 @@ func main() {
 		// Create the response with the short alias
 		response := struct {
 			ShortURL string `json:"short_url"`
-		}{ShortURL: fmt.Sprintf("http://localhost:8080/redirect/%s", shortURL)}
+		}{ShortURL: fmt.Sprintf("http://localhost:8081/redirect/%s", shortURL)}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -83,40 +93,16 @@ func main() {
 	http.ListenAndServe(":8080", nil)
 }
 
-// Function to generate random string
-func generateRandomString(length int) string {
-	var chars []rune
-	for i := 'a'; i <= 'z'; i++ {
-		chars = append(chars, i)
-	}
-	for i := 'A'; i <= 'Z'; i++ {
-		chars = append(chars, i)
-	}
-	for i := 0; i <= 9; i++ {
-		chars = append(chars, rune(i+48))
-	}
+// generateRandomString returns a cryptographically random alphanumeric string.
+func generateRandomString(length int) (string, error) {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
 	for i := range bytes {
-		bytes[i] = byte(chars[rand.Intn(len(chars))])
+		bytes[i] = chars[int(bytes[i])%len(chars)]
 	}
-	return string(bytes)
-}
-
-// Function to check if the short alias already exists in the database
-func checkShortURLExists(db *sql.DB, shortURL string) (bool, error) {
-	ctx := context.Background()
-	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM url_mappings WHERE short_url = $1", shortURL).Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
-
-// Function to insert long URL -> short alias mapping into the database
-func insertURLMapping(db *sql.DB, longURL string, shortURL string) error {
-	ctx := context.Background()
-	_, err := db.ExecContext(ctx, "INSERT INTO url_mappings (long_url, short_url) VALUES ($1, $2)", longURL, shortURL)
-	return err
+	return string(bytes), nil
 }

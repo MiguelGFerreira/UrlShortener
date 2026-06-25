@@ -1,20 +1,21 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
+
+	"UrlShortener/internal/store"
 
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq" // Import PostgreSQL driver
 )
 
 func main() {
-	DBUSER := godotenv.Load("DB_USER")
-	DBPASS := godotenv.Load("DB_PASS")
-	// Conect to PostgreSQL
-	db, err := sql.Open("postgres", fmt.Sprintf("user=%s password=%s dbname=url_shortener sslmode=disable", DBUSER, DBPASS))
+	// Load variables from the .env file (if present) into the environment
+	godotenv.Load()
+
+	db, err := store.Connect(os.Getenv("DB_USER"), os.Getenv("DB_PASS"))
 	if err != nil {
 		panic(err)
 	}
@@ -29,8 +30,8 @@ func main() {
 
 		shortURL := r.URL.Path[len("/redirect/"):]
 
-		// Fetch the long URL corresponding to the short alias in the database
-		longURL, err := getLongURLByShortURL(db, shortURL)
+		// Fetch the mapping corresponding to the short alias in the database
+		mapping, err := store.MappingByShortURL(r.Context(), db, shortURL)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				w.WriteHeader(http.StatusNotFound)
@@ -42,19 +43,11 @@ func main() {
 		}
 
 		// Redirect user to long URL
-		http.Redirect(w, r, longURL, http.StatusMovedPermanently)
+		http.Redirect(w, r, mapping.LongURL, http.StatusMovedPermanently)
 	})
 
 	// Start HTTP server
 	http.HandleFunc("/redirect/", redirectHandler)
 	fmt.Println("Redirect server running on port 8081")
 	http.ListenAndServe(":8081", nil)
-}
-
-// Function to search long URL by short alias
-func getLongURLByShortURL(db *sql.DB, shortURL string) (string, error) {
-	ctx := context.Background()
-	var longURL string
-	err := db.QueryRowContext(ctx, "SELECT long_url FROM url_mappings WHERE short_url = $1", shortURL).Scan(&longURL)
-	return longURL, err
 }
