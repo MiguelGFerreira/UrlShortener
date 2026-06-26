@@ -146,6 +146,18 @@ curl -s -X POST http://localhost:8080/shorten \
 
 If the alias is already in use, the service responds with `409 Conflict`.
 
+**Expiring links** — include `expires_in` (seconds) to make a link self-destruct.
+Once expired, the redirector returns `410 Gone`:
+
+```bash
+curl -s -X POST http://localhost:8080/shorten \
+  -H "Content-Type: application/json" \
+  -d '{"long_url": "https://example.com", "expires_in": 3600}'
+```
+
+> `POST /shorten` is rate limited per client IP (burst of 10, ~5 req/s);
+> exceeding it returns `429 Too Many Requests`.
+
 **Follow a short URL** — open the returned link in a browser, or:
 
 ```bash
@@ -172,6 +184,13 @@ curl -s http://localhost:8080/stats/my-link
 }
 ```
 
+**Delete a link** — remove an alias with `DELETE /shorten/{alias}` (returns
+`204 No Content`, or `404` when the alias does not exist):
+
+```bash
+curl -i -X DELETE http://localhost:8080/shorten/my-link
+```
+
 **Health check** — each service exposes `/health`, returning `200 ok` while its
 database connection is alive (and `503` otherwise):
 
@@ -188,8 +207,8 @@ Ideas for extending the project:
 - [x] `/health` endpoint on both services
 - [x] Custom aliases chosen by the user
 - [x] Click statistics per short URL
-- [ ] Link expiration (TTL) and deletion
-- [ ] Rate limiting on `/shorten`
+- [x] Link expiration (TTL) and deletion
+- [x] Rate limiting on `/shorten`
 - [ ] Redis cache in front of the redirect lookup
 - [ ] A small HTML front-end for shortening from the browser
 - [x] Dockerfile + docker-compose (app + PostgreSQL)

@@ -75,10 +75,14 @@ func ShortURLExists(ctx context.Context, db *sql.DB, shortURL string) (bool, err
 	return count > 0, nil
 }
 
-// InsertMapping stores a new long URL -> short alias mapping. It returns
-// ErrAliasTaken when the short alias already exists.
+// InsertMapping stores a new long URL -> short alias mapping. A nil
+// m.ExpiresAt means the link never expires. It returns ErrAliasTaken when the
+// short alias already exists.
 func InsertMapping(ctx context.Context, db *sql.DB, m model.URLMapping) error {
-	_, err := db.ExecContext(ctx, "INSERT INTO url_mappings (long_url, short_url) VALUES ($1, $2)", m.LongURL, m.ShortURL)
+	_, err := db.ExecContext(ctx,
+		"INSERT INTO url_mappings (long_url, short_url, expires_at) VALUES ($1, $2, $3)",
+		m.LongURL, m.ShortURL, m.ExpiresAt,
+	)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 		return ErrAliasTaken
@@ -88,14 +92,29 @@ func InsertMapping(ctx context.Context, db *sql.DB, m model.URLMapping) error {
 
 // RecordClick increments the click counter for the given short alias, stamps
 // the access time, and returns the mapped long URL in a single atomic update.
-// It returns sql.ErrNoRows when the alias does not exist.
+// Expired aliases are treated as absent. It returns sql.ErrNoRows when the
+// alias does not exist or has expired.
 func RecordClick(ctx context.Context, db *sql.DB, shortURL string) (string, error) {
 	var longURL string
 	err := db.QueryRowContext(ctx,
-		"UPDATE url_mappings SET clicks = clicks + 1, last_accessed_at = now() WHERE short_url = $1 RETURNING long_url",
+		"UPDATE url_mappings SET clicks = clicks + 1, last_accessed_at = now() WHERE short_url = $1 AND (expires_at IS NULL OR expires_at > now()) RETURNING long_url",
 		shortURL,
 	).Scan(&longURL)
 	return longURL, err
+}
+
+// DeleteByShortURL removes the mapping for the given short alias, reporting
+// whether a row was actually deleted.
+func DeleteByShortURL(ctx context.Context, db *sql.DB, shortURL string) (bool, error) {
+	res, err := db.ExecContext(ctx, "DELETE FROM url_mappings WHERE short_url = $1", shortURL)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // StatsByShortURL returns the mapping and its usage statistics for the given
@@ -103,8 +122,8 @@ func RecordClick(ctx context.Context, db *sql.DB, shortURL string) (string, erro
 func StatsByShortURL(ctx context.Context, db *sql.DB, shortURL string) (model.URLMapping, error) {
 	m := model.URLMapping{ShortURL: shortURL}
 	err := db.QueryRowContext(ctx,
-		"SELECT long_url, clicks, created_at, last_accessed_at FROM url_mappings WHERE short_url = $1",
+		"SELECT long_url, clicks, created_at, last_accessed_at, expires_at FROM url_mappings WHERE short_url = $1",
 		shortURL,
-	).Scan(&m.LongURL, &m.Clicks, &m.CreatedAt, &m.LastAccessedAt)
+	).Scan(&m.LongURL, &m.Clicks, &m.CreatedAt, &m.LastAccessedAt, &m.ExpiresAt)
 	return m, err
 }

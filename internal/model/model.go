@@ -10,4 +10,5 @@ type URLMapping struct {
 	Clicks         int64      `json:"clicks"`
 	CreatedAt      time.Time  `json:"created_at"`
 	LastAccessedAt *time.Time `json:"last_accessed_at,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }

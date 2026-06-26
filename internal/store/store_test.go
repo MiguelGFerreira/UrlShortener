@@ -56,8 +56,8 @@ func TestShortURLExists(t *testing.T) {
 
 func TestInsertMapping(t *testing.T) {
 	db, mock := newMockDB(t)
-	mock.ExpectExec(`INSERT INTO url_mappings \(long_url, short_url\) VALUES \(\$1, \$2\)`).
-		WithArgs("https://example.com", "abc123").
+	mock.ExpectExec(`INSERT INTO url_mappings \(long_url, short_url, expires_at\) VALUES \(\$1, \$2, \$3\)`).
+		WithArgs("https://example.com", "abc123", nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := InsertMapping(context.Background(), db, model.URLMapping{
@@ -75,7 +75,7 @@ func TestInsertMapping(t *testing.T) {
 func TestInsertMappingAliasTaken(t *testing.T) {
 	db, mock := newMockDB(t)
 	mock.ExpectExec(`INSERT INTO url_mappings`).
-		WithArgs("https://example.com", "taken").
+		WithArgs("https://example.com", "taken", nil).
 		WillReturnError(&pq.Error{Code: "23505"})
 
 	err := InsertMapping(context.Background(), db, model.URLMapping{
@@ -118,9 +118,9 @@ func TestRecordClickNotFound(t *testing.T) {
 func TestStatsByShortURL(t *testing.T) {
 	db, mock := newMockDB(t)
 	created := time.Now()
-	rows := sqlmock.NewRows([]string{"long_url", "clicks", "created_at", "last_accessed_at"}).
-		AddRow("https://example.com", int64(7), created, nil)
-	mock.ExpectQuery(`SELECT long_url, clicks, created_at, last_accessed_at FROM url_mappings WHERE short_url = \$1`).
+	rows := sqlmock.NewRows([]string{"long_url", "clicks", "created_at", "last_accessed_at", "expires_at"}).
+		AddRow("https://example.com", int64(7), created, nil, nil)
+	mock.ExpectQuery(`SELECT long_url, clicks, created_at, last_accessed_at, expires_at FROM url_mappings WHERE short_url = \$1`).
 		WithArgs("abc123").
 		WillReturnRows(rows)
 
@@ -136,5 +136,38 @@ func TestStatsByShortURL(t *testing.T) {
 	}
 	if m.LastAccessedAt != nil {
 		t.Errorf("last_accessed_at = %v, want nil", m.LastAccessedAt)
+	}
+	if m.ExpiresAt != nil {
+		t.Errorf("expires_at = %v, want nil", m.ExpiresAt)
+	}
+}
+
+func TestDeleteByShortURL(t *testing.T) {
+	db, mock := newMockDB(t)
+	mock.ExpectExec(`DELETE FROM url_mappings WHERE short_url = \$1`).
+		WithArgs("abc123").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	deleted, err := DeleteByShortURL(context.Background(), db, "abc123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !deleted {
+		t.Error("deleted = false, want true")
+	}
+}
+
+func TestDeleteByShortURLMissing(t *testing.T) {
+	db, mock := newMockDB(t)
+	mock.ExpectExec(`DELETE FROM url_mappings WHERE short_url = \$1`).
+		WithArgs("missing").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	deleted, err := DeleteByShortURL(context.Background(), db, "missing")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deleted {
+		t.Error("deleted = true, want false")
 	}
 }

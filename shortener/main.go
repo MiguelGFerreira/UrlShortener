@@ -15,6 +15,7 @@ import (
 
 	"UrlShortener/internal/health"
 	"UrlShortener/internal/model"
+	"UrlShortener/internal/ratelimit"
 	"UrlShortener/internal/store"
 
 	"github.com/joho/godotenv"
@@ -37,10 +38,11 @@ func main() {
 			return
 		}
 
-		// Decode the request body: the long URL plus an optional custom alias
+		// Decode the request body: long URL, optional custom alias and TTL
 		var body struct {
-			LongURL string `json:"long_url"`
-			Alias   string `json:"alias"`
+			LongURL   string `json:"long_url"`
+			Alias     string `json:"alias"`
+			ExpiresIn int    `json:"expires_in"` // seconds from now; 0 = never
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -54,6 +56,18 @@ func main() {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintln(w, "Error: long_url must be a valid http or https URL")
 			return
+		}
+
+		// Resolve the optional time-to-live into an absolute expiry instant
+		if body.ExpiresIn < 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintln(w, "Error: expires_in must be a non-negative number of seconds")
+			return
+		}
+		var expiresAt *time.Time
+		if body.ExpiresIn > 0 {
+			t := time.Now().Add(time.Duration(body.ExpiresIn) * time.Second)
+			expiresAt = &t
 		}
 
 		ctx := r.Context()
@@ -90,7 +104,7 @@ func main() {
 		}
 
 		// Insert the long URL -> short alias mapping into the database
-		mapping := model.URLMapping{LongURL: longURL, ShortURL: shortURL}
+		mapping := model.URLMapping{LongURL: longURL, ShortURL: shortURL, ExpiresAt: expiresAt}
 		if err := store.InsertMapping(ctx, db, mapping); err != nil {
 			if errors.Is(err, store.ErrAliasTaken) {
 				w.WriteHeader(http.StatusConflict)
@@ -109,6 +123,32 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
+	})
+
+	// Handler to delete a short alias
+	deleteHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		alias := strings.TrimSpace(r.URL.Path[len("/shorten/"):])
+		if alias == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		deleted, err := store.DeleteByShortURL(r.Context(), db, alias)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "Error: %v", err)
+			return
+		}
+		if !deleted {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	// Handler to report usage statistics for a short alias
@@ -141,21 +181,27 @@ func main() {
 			Clicks         int64      `json:"clicks"`
 			CreatedAt      time.Time  `json:"created_at"`
 			LastAccessedAt *time.Time `json:"last_accessed_at,omitempty"`
+			ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 		}{
 			ShortURL:       alias,
 			LongURL:        m.LongURL,
 			Clicks:         m.Clicks,
 			CreatedAt:      m.CreatedAt,
 			LastAccessedAt: m.LastAccessedAt,
+			ExpiresAt:      m.ExpiresAt,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	})
 
+	// Rate limit the creation endpoint per client IP (5 req/s, burst of 10)
+	limiter := ratelimit.New(5, 10)
+
 	// Start HTTP server
 	http.HandleFunc("/health", health.Handler(db))
-	http.HandleFunc("/shorten", shortenHandler)
+	http.Handle("/shorten", limiter.Middleware(shortenHandler))
+	http.HandleFunc("/shorten/", deleteHandler)
 	http.HandleFunc("/stats/", statsHandler)
 	fmt.Println("Shortening server running on port 8080")
 	http.ListenAndServe(":8080", nil)

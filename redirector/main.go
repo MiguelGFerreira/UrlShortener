@@ -30,10 +30,15 @@ func main() {
 
 		shortURL := r.URL.Path[len("/redirect/"):]
 
-		// Resolve the alias, counting this visit, and redirect to the long URL
+		// Resolve the alias, counting this visit, and redirect to the long URL.
+		// Expired aliases don't match, so distinguish them from missing ones.
 		longURL, err := store.RecordClick(r.Context(), db, shortURL)
 		if err != nil {
 			if err == sql.ErrNoRows {
+				if exists, exErr := store.ShortURLExists(r.Context(), db, shortURL); exErr == nil && exists {
+					w.WriteHeader(http.StatusGone) // exists but expired
+					return
+				}
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
