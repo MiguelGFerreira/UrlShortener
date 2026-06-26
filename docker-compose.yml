@@ -26,6 +26,8 @@ services:
       DB_HOST: db
       DB_USER: ${DB_USER:-postgres}
       DB_PASS: ${DB_PASS:-postgres}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8081/redirect}
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-*}
     ports:
       - "8080:8080"
     depends_on:

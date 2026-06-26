@@ -19,7 +19,7 @@ flowchart LR
     Client -->|POST /shorten| Shortener["Shortener&nbsp;:8080"]
     Client -->|GET /redirect/:alias| Redirector["Redirector&nbsp;:8081"]
     Shortener -->|INSERT mapping| DB[(PostgreSQL)]
-    Redirector -->|SELECT long_url| DB
+    Redirector -->|UPDATE clicks RETURNING long_url| DB
 ```
 
 Both services share the data-access code in `internal/store` and the domain
@@ -29,11 +29,15 @@ type in `internal/model`, so the database logic lives in a single place.
 
 ```
 .
-├── shortener/        # POST /shorten — creates short aliases (:8080)
+├── shortener/        # JSON API: shorten, stats, delete (:8080)
 ├── redirector/       # GET /redirect/{alias} — 301 redirect (:8081)
 ├── internal/
 │   ├── model/        # URLMapping domain type
-│   └── store/        # PostgreSQL connection + queries
+│   ├── store/        # PostgreSQL connection + queries
+│   ├── health/       # shared /health handler
+│   ├── ratelimit/    # per-IP token-bucket middleware
+│   └── cors/         # CORS middleware for browser clients
+├── frontend/         # React/Next.js component for the public UI
 ├── schema.sql        # Database schema
 └── .env.example      # Required environment variables
 ```
@@ -82,6 +86,13 @@ type in `internal/model`, so the database logic lives in a single place.
    | `DB_NAME`    | Database name       | `url_shortener` |
    | `DB_SSLMODE` | libpq SSL mode      | `disable`       |
 
+   The shortener also reads two settings for public/browser use:
+
+   | Variable              | Description                          | Default                          |
+   | --------------------- | ------------------------------------ | -------------------------------- |
+   | `PUBLIC_BASE_URL`     | Base for generated short links       | `http://localhost:8081/redirect` |
+   | `CORS_ALLOWED_ORIGIN` | Origin allowed to call the API (`*`) | `*`                              |
+
    > Only `DB_USER`/`DB_PASS` are usually needed; the rest have sensible
    > defaults for local development.
 
@@ -95,7 +106,7 @@ three containers (no manual database setup needed):
 docker compose up --build
 ```
 
-- Shortener → http://localhost:8080
+- Shortener API → http://localhost:8080
 - Redirector → http://localhost:8081
 
 Credentials default to `postgres`/`postgres`; override them with a `.env` file
@@ -117,6 +128,11 @@ go run ./redirector   # listens on :8081
 ```
 
 ## Usage
+
+**Front-end** — a ready-to-use React/Next.js component lives in
+[`frontend/`](frontend/); drop it into a site (such as a portfolio) to let
+visitors shorten links. It calls the JSON API below, which is CORS-enabled for
+browser use.
 
 **Shorten a URL** — send a `POST` to `/shorten`:
 
@@ -210,7 +226,7 @@ Ideas for extending the project:
 - [x] Link expiration (TTL) and deletion
 - [x] Rate limiting on `/shorten`
 - [ ] Redis cache in front of the redirect lookup
-- [ ] A small HTML front-end for shortening from the browser
+- [x] React/Next.js front-end component (in `frontend/`)
 - [x] Dockerfile + docker-compose (app + PostgreSQL)
 - [x] Unit tests and CI
 

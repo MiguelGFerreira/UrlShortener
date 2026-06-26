@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 
+	"UrlShortener/internal/cors"
 	"UrlShortener/internal/health"
 	"UrlShortener/internal/model"
 	"UrlShortener/internal/ratelimit"
@@ -31,14 +33,26 @@ func main() {
 	}
 	defer db.Close()
 
-	// Handler to shorten URLs
+	// Public base for generated short links (the redirector's public address)
+	publicBase := os.Getenv("PUBLIC_BASE_URL")
+	if publicBase == "" {
+		publicBase = "http://localhost:8081/redirect"
+	}
+	publicBase = strings.TrimRight(publicBase, "/")
+
+	// Origin allowed to call the API from a browser ("*" = any)
+	allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
+
+	// JSON API: shorten a URL
 	shortenHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Decode the request body: long URL, optional custom alias and TTL
 		var body struct {
 			LongURL   string `json:"long_url"`
 			Alias     string `json:"alias"`
@@ -50,65 +64,12 @@ func main() {
 			return
 		}
 
-		// Validate the submitted URL before storing it
-		longURL := strings.TrimSpace(body.LongURL)
-		if !validLongURL(longURL) {
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintln(w, "Error: long_url must be a valid http or https URL")
-			return
-		}
-
-		// Resolve the optional time-to-live into an absolute expiry instant
-		if body.ExpiresIn < 0 {
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintln(w, "Error: expires_in must be a non-negative number of seconds")
-			return
-		}
-		var expiresAt *time.Time
-		if body.ExpiresIn > 0 {
-			t := time.Now().Add(time.Duration(body.ExpiresIn) * time.Second)
-			expiresAt = &t
-		}
-
-		ctx := r.Context()
-
-		// Choose the alias: the caller's custom one when provided, otherwise a
-		// freshly generated unique one.
-		var shortURL string
-		if alias := strings.TrimSpace(body.Alias); alias != "" {
-			if !validAlias(alias) {
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintln(w, "Error: alias must be 3-16 chars of letters, digits, '-' or '_'")
-				return
-			}
-			taken, err := store.ShortURLExists(ctx, db, alias)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "Error: %v", err)
-				return
-			}
-			if taken {
-				w.WriteHeader(http.StatusConflict)
-				fmt.Fprintln(w, "Error: alias already taken")
-				return
-			}
-			shortURL = alias
-		} else {
-			var err error
-			shortURL, err = uniqueRandomAlias(ctx, db)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "Error: %v", err)
-				return
-			}
-		}
-
-		// Insert the long URL -> short alias mapping into the database
-		mapping := model.URLMapping{LongURL: longURL, ShortURL: shortURL, ExpiresAt: expiresAt}
-		if err := store.InsertMapping(ctx, db, mapping); err != nil {
-			if errors.Is(err, store.ErrAliasTaken) {
-				w.WriteHeader(http.StatusConflict)
-				fmt.Fprintln(w, "Error: alias already taken")
+		shortURL, err := createMapping(r.Context(), db, body.LongURL, body.Alias, body.ExpiresIn)
+		if err != nil {
+			var ce createError
+			if errors.As(err, &ce) {
+				w.WriteHeader(ce.status)
+				fmt.Fprintln(w, "Error: "+ce.msg)
 				return
 			}
 			w.WriteHeader(http.StatusInternalServerError)
@@ -116,10 +77,9 @@ func main() {
 			return
 		}
 
-		// Create the response with the short alias
 		response := struct {
 			ShortURL string `json:"short_url"`
-		}{ShortURL: fmt.Sprintf("http://localhost:8081/redirect/%s", shortURL)}
+		}{ShortURL: publicBase + "/" + shortURL}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -198,13 +158,71 @@ func main() {
 	// Rate limit the creation endpoint per client IP (5 req/s, burst of 10)
 	limiter := ratelimit.New(5, 10)
 
-	// Start HTTP server
-	http.HandleFunc("/health", health.Handler(db))
-	http.Handle("/shorten", limiter.Middleware(shortenHandler))
-	http.HandleFunc("/shorten/", deleteHandler)
-	http.HandleFunc("/stats/", statsHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", health.Handler(db))
+	mux.Handle("/shorten", limiter.Middleware(shortenHandler))
+	mux.HandleFunc("/shorten/", deleteHandler)
+	mux.HandleFunc("/stats/", statsHandler)
+
 	fmt.Println("Shortening server running on port 8080")
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(":8080", cors.Middleware(allowedOrigin, mux))
+}
+
+// createError carries an HTTP status alongside a client-facing message.
+type createError struct {
+	status int
+	msg    string
+}
+
+func (e createError) Error() string { return e.msg }
+
+// createMapping validates the inputs, picks an alias (custom or random) and
+// stores the mapping, returning the short alias. Validation problems are
+// reported as createError values carrying the appropriate HTTP status.
+func createMapping(ctx context.Context, db *sql.DB, rawURL, rawAlias string, expiresIn int) (string, error) {
+	longURL := strings.TrimSpace(rawURL)
+	if !validLongURL(longURL) {
+		return "", createError{http.StatusBadRequest, "long_url must be a valid http or https URL"}
+	}
+
+	if expiresIn < 0 {
+		return "", createError{http.StatusBadRequest, "expires_in must be a non-negative number of seconds"}
+	}
+	var expiresAt *time.Time
+	if expiresIn > 0 {
+		t := time.Now().Add(time.Duration(expiresIn) * time.Second)
+		expiresAt = &t
+	}
+
+	var shortURL string
+	if alias := strings.TrimSpace(rawAlias); alias != "" {
+		if !validAlias(alias) {
+			return "", createError{http.StatusBadRequest, "alias must be 3-16 chars of letters, digits, '-' or '_'"}
+		}
+		taken, err := store.ShortURLExists(ctx, db, alias)
+		if err != nil {
+			return "", err
+		}
+		if taken {
+			return "", createError{http.StatusConflict, "alias already taken"}
+		}
+		shortURL = alias
+	} else {
+		var err error
+		shortURL, err = uniqueRandomAlias(ctx, db)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	mapping := model.URLMapping{LongURL: longURL, ShortURL: shortURL, ExpiresAt: expiresAt}
+	if err := store.InsertMapping(ctx, db, mapping); err != nil {
+		if errors.Is(err, store.ErrAliasTaken) {
+			return "", createError{http.StatusConflict, "alias already taken"}
+		}
+		return "", err
+	}
+	return shortURL, nil
 }
 
 // validLongURL reports whether raw is a well-formed absolute http(s) URL.
