@@ -135,12 +135,41 @@ Response:
 > `long_url` must be a valid `http`/`https` URL; otherwise the service responds
 > with `400 Bad Request`.
 
+**Custom alias** — optionally include an `alias` (3–16 chars: letters, digits,
+`-` or `_`) to pick your own short code:
+
+```bash
+curl -s -X POST http://localhost:8080/shorten \
+  -H "Content-Type: application/json" \
+  -d '{"long_url": "https://example.com", "alias": "my-link"}'
+```
+
+If the alias is already in use, the service responds with `409 Conflict`.
+
 **Follow a short URL** — open the returned link in a browser, or:
 
 ```bash
 curl -i http://localhost:8081/redirect/Ab3xZ9
 # HTTP/1.1 301 Moved Permanently
 # Location: https://example.com/some/very/long/path
+```
+
+> Each visit increments the alias's click counter.
+
+**Statistics** — inspect usage for an alias via `/stats/{alias}`:
+
+```bash
+curl -s http://localhost:8080/stats/my-link
+```
+
+```json
+{
+  "short_url": "my-link",
+  "long_url": "https://example.com",
+  "clicks": 3,
+  "created_at": "2026-06-26T12:00:00Z",
+  "last_accessed_at": "2026-06-26T12:34:56Z"
+}
 ```
 
 **Health check** — each service exposes `/health`, returning `200 ok` while its
@@ -157,8 +186,8 @@ Ideas for extending the project:
 
 - [x] Input validation for submitted URLs (scheme/format checks)
 - [x] `/health` endpoint on both services
-- [ ] Custom aliases chosen by the user
-- [ ] Click statistics per short URL
+- [x] Custom aliases chosen by the user
+- [x] Click statistics per short URL
 - [ ] Link expiration (TTL) and deletion
 - [ ] Rate limiting on `/shorten`
 - [ ] Redis cache in front of the redirect lookup

@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"UrlShortener/internal/model"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func newMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
@@ -70,33 +72,69 @@ func TestInsertMapping(t *testing.T) {
 	}
 }
 
-func TestMappingByShortURL(t *testing.T) {
+func TestInsertMappingAliasTaken(t *testing.T) {
 	db, mock := newMockDB(t)
-	rows := sqlmock.NewRows([]string{"long_url"}).AddRow("https://example.com")
-	mock.ExpectQuery(`SELECT long_url FROM url_mappings WHERE short_url = \$1`).
-		WithArgs("abc123").
-		WillReturnRows(rows)
+	mock.ExpectExec(`INSERT INTO url_mappings`).
+		WithArgs("https://example.com", "taken").
+		WillReturnError(&pq.Error{Code: "23505"})
 
-	got, err := MappingByShortURL(context.Background(), db, "abc123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.LongURL != "https://example.com" {
-		t.Errorf("LongURL = %q, want %q", got.LongURL, "https://example.com")
-	}
-	if got.ShortURL != "abc123" {
-		t.Errorf("ShortURL = %q, want %q", got.ShortURL, "abc123")
+	err := InsertMapping(context.Background(), db, model.URLMapping{
+		LongURL:  "https://example.com",
+		ShortURL: "taken",
+	})
+	if !errors.Is(err, ErrAliasTaken) {
+		t.Fatalf("expected ErrAliasTaken, got %v", err)
 	}
 }
 
-func TestMappingByShortURLNotFound(t *testing.T) {
+func TestRecordClick(t *testing.T) {
 	db, mock := newMockDB(t)
-	mock.ExpectQuery(`SELECT long_url FROM url_mappings WHERE short_url = \$1`).
+	rows := sqlmock.NewRows([]string{"long_url"}).AddRow("https://example.com")
+	mock.ExpectQuery(`UPDATE url_mappings SET clicks = clicks \+ 1`).
+		WithArgs("abc123").
+		WillReturnRows(rows)
+
+	got, err := RecordClick(context.Background(), db, "abc123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "https://example.com" {
+		t.Errorf("long_url = %q, want %q", got, "https://example.com")
+	}
+}
+
+func TestRecordClickNotFound(t *testing.T) {
+	db, mock := newMockDB(t)
+	mock.ExpectQuery(`UPDATE url_mappings SET clicks = clicks \+ 1`).
 		WithArgs("missing").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err := MappingByShortURL(context.Background(), db, "missing")
+	_, err := RecordClick(context.Background(), db, "missing")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected sql.ErrNoRows, got %v", err)
+	}
+}
+
+func TestStatsByShortURL(t *testing.T) {
+	db, mock := newMockDB(t)
+	created := time.Now()
+	rows := sqlmock.NewRows([]string{"long_url", "clicks", "created_at", "last_accessed_at"}).
+		AddRow("https://example.com", int64(7), created, nil)
+	mock.ExpectQuery(`SELECT long_url, clicks, created_at, last_accessed_at FROM url_mappings WHERE short_url = \$1`).
+		WithArgs("abc123").
+		WillReturnRows(rows)
+
+	m, err := StatsByShortURL(context.Background(), db, "abc123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.Clicks != 7 {
+		t.Errorf("clicks = %d, want 7", m.Clicks)
+	}
+	if m.LongURL != "https://example.com" {
+		t.Errorf("long_url = %q, want %q", m.LongURL, "https://example.com")
+	}
+	if m.LastAccessedAt != nil {
+		t.Errorf("last_accessed_at = %v, want nil", m.LastAccessedAt)
 	}
 }

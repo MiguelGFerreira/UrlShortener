@@ -28,3 +28,26 @@ func TestValidLongURL(t *testing.T) {
 		}
 	}
 }
+
+func TestValidAlias(t *testing.T) {
+	valid := []string{"abc", "my-link_1", "ABCdef123", "a1b2c3"}
+	for _, a := range valid {
+		if !validAlias(a) {
+			t.Errorf("validAlias(%q) = false, want true", a)
+		}
+	}
+
+	invalid := []string{
+		"ab",                         // too short
+		"this-alias-is-way-too-long", // longer than 16
+		"has space",
+		"slash/here",
+		"dot.dot",
+		"",
+	}
+	for _, a := range invalid {
+		if validAlias(a) {
+			t.Errorf("validAlias(%q) = true, want false", a)
+		}
+	}
+}

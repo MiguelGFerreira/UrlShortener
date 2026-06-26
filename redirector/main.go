@@ -30,8 +30,8 @@ func main() {
 
 		shortURL := r.URL.Path[len("/redirect/"):]
 
-		// Fetch the mapping corresponding to the short alias in the database
-		mapping, err := store.MappingByShortURL(r.Context(), db, shortURL)
+		// Resolve the alias, counting this visit, and redirect to the long URL
+		longURL, err := store.RecordClick(r.Context(), db, shortURL)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				w.WriteHeader(http.StatusNotFound)
@@ -43,7 +43,7 @@ func main() {
 		}
 
 		// Redirect user to long URL
-		http.Redirect(w, r, mapping.LongURL, http.StatusMovedPermanently)
+		http.Redirect(w, r, longURL, http.StatusMovedPermanently)
 	})
 
 	// Start HTTP server

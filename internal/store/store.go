@@ -5,13 +5,18 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 
 	"UrlShortener/internal/model"
 
-	_ "github.com/lib/pq" // PostgreSQL driver
+	"github.com/lib/pq" // PostgreSQL driver
 )
+
+// ErrAliasTaken is returned when inserting a mapping whose short alias already
+// exists (PostgreSQL unique-violation, SQLSTATE 23505).
+var ErrAliasTaken = errors.New("short alias already taken")
 
 // Config holds the PostgreSQL connection settings.
 type Config struct {
@@ -70,16 +75,36 @@ func ShortURLExists(ctx context.Context, db *sql.DB, shortURL string) (bool, err
 	return count > 0, nil
 }
 
-// InsertMapping stores a new long URL -> short alias mapping.
+// InsertMapping stores a new long URL -> short alias mapping. It returns
+// ErrAliasTaken when the short alias already exists.
 func InsertMapping(ctx context.Context, db *sql.DB, m model.URLMapping) error {
 	_, err := db.ExecContext(ctx, "INSERT INTO url_mappings (long_url, short_url) VALUES ($1, $2)", m.LongURL, m.ShortURL)
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		return ErrAliasTaken
+	}
 	return err
 }
 
-// MappingByShortURL returns the mapping for the given short alias.
+// RecordClick increments the click counter for the given short alias, stamps
+// the access time, and returns the mapped long URL in a single atomic update.
 // It returns sql.ErrNoRows when the alias does not exist.
-func MappingByShortURL(ctx context.Context, db *sql.DB, shortURL string) (model.URLMapping, error) {
+func RecordClick(ctx context.Context, db *sql.DB, shortURL string) (string, error) {
+	var longURL string
+	err := db.QueryRowContext(ctx,
+		"UPDATE url_mappings SET clicks = clicks + 1, last_accessed_at = now() WHERE short_url = $1 RETURNING long_url",
+		shortURL,
+	).Scan(&longURL)
+	return longURL, err
+}
+
+// StatsByShortURL returns the mapping and its usage statistics for the given
+// short alias. It returns sql.ErrNoRows when the alias does not exist.
+func StatsByShortURL(ctx context.Context, db *sql.DB, shortURL string) (model.URLMapping, error) {
 	m := model.URLMapping{ShortURL: shortURL}
-	err := db.QueryRowContext(ctx, "SELECT long_url FROM url_mappings WHERE short_url = $1", shortURL).Scan(&m.LongURL)
+	err := db.QueryRowContext(ctx,
+		"SELECT long_url, clicks, created_at, last_accessed_at FROM url_mappings WHERE short_url = $1",
+		shortURL,
+	).Scan(&m.LongURL, &m.Clicks, &m.CreatedAt, &m.LastAccessedAt)
 	return m, err
 }
