@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"UrlShortener/internal/health"
 	"UrlShortener/internal/store"
 
 	"github.com/joho/godotenv"
@@ -46,6 +47,7 @@ func main() {
 	})
 
 	// Start HTTP server
+	http.HandleFunc("/health", health.Handler(db))
 	http.HandleFunc("/redirect/", redirectHandler)
 	fmt.Println("Redirect server running on port 8081")
 	http.ListenAndServe(":8081", nil)

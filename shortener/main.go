@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
+	"UrlShortener/internal/health"
 	"UrlShortener/internal/model"
 	"UrlShortener/internal/store"
 
@@ -36,6 +39,14 @@ func main() {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, "Error: %v", err)
+			return
+		}
+
+		// Validate the submitted URL before storing it
+		longURL := strings.TrimSpace(body.LongURL)
+		if !validLongURL(longURL) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintln(w, "Error: long_url must be a valid http or https URL")
 			return
 		}
 
@@ -70,7 +81,7 @@ func main() {
 		}
 
 		// Insert the long URL -> short alias mapping into the database
-		mapping := model.URLMapping{LongURL: body.LongURL, ShortURL: shortURL}
+		mapping := model.URLMapping{LongURL: longURL, ShortURL: shortURL}
 		if err := store.InsertMapping(ctx, db, mapping); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "Error: %v", err)
@@ -87,9 +98,22 @@ func main() {
 	})
 
 	// Start HTTP server
+	http.HandleFunc("/health", health.Handler(db))
 	http.HandleFunc("/shorten", shortenHandler)
 	fmt.Println("Shortening server running on port 8080")
 	http.ListenAndServe(":8080", nil)
+}
+
+// validLongURL reports whether raw is a well-formed absolute http(s) URL.
+func validLongURL(raw string) bool {
+	u, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	return u.Host != ""
 }
 
 // generateRandomString returns a cryptographically random alphanumeric string.

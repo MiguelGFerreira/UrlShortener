@@ -132,6 +132,9 @@ Response:
 { "short_url": "http://localhost:8081/redirect/Ab3xZ9" }
 ```
 
+> `long_url` must be a valid `http`/`https` URL; otherwise the service responds
+> with `400 Bad Request`.
+
 **Follow a short URL** — open the returned link in a browser, or:
 
 ```bash
@@ -140,11 +143,20 @@ curl -i http://localhost:8081/redirect/Ab3xZ9
 # Location: https://example.com/some/very/long/path
 ```
 
+**Health check** — each service exposes `/health`, returning `200 ok` while its
+database connection is alive (and `503` otherwise):
+
+```bash
+curl -i http://localhost:8080/health   # shortener
+curl -i http://localhost:8081/health   # redirector
+```
+
 ## Roadmap
 
 Ideas for extending the project:
 
-- [ ] Input validation for submitted URLs (scheme/format checks)
+- [x] Input validation for submitted URLs (scheme/format checks)
+- [x] `/health` endpoint on both services
 - [ ] Custom aliases chosen by the user
 - [ ] Click statistics per short URL
 - [ ] Link expiration (TTL) and deletion
